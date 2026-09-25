@@ -1,0 +1,56 @@
+apply plugin: 'java-library'
+
+version = '0.1.0'
+
+sourceSets {
+    main {
+        java.srcDirs = ["src"]
+    }
+}
+
+repositories {
+    mavenLocal()
+    maven { url 'https://www.jitpack.io' }
+}
+
+ext {
+    // The loader the wrapper compiles against. Only its desktop entry point is used, so this is the one
+    // artifact the wrapper needs; it is published from the loader's own repository.
+    loaderVersion = '0.2.0'
+}
+
+dependencies {
+    compileOnly "com.github.MDTCopper.loader:desktop:$loaderVersion"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+// The jar carries what it is and what it was built against, so a bug report can name both without anyone
+// guessing from the file name. The loader ships the same kind of file in its own jar.
+def versionDir = layout.buildDirectory.dir('generated/version-info')
+def versionInfo = versionDir.map { it.file('version.properties') }
+def wrapperVersion = version
+def targetLoader = loaderVersion
+
+tasks.register('versionProperties') {
+    def out = versionInfo
+    outputs.file(out)
+    doLast {
+        def file = out.get().asFile
+        file.parentFile.mkdirs()
+        file.text = "version=${wrapperVersion}\nloaderVersion=${targetLoader}\n"
+    }
+}
+
+sourceSets.main.resources.srcDir(versionDir)
+tasks.named('processResources') { dependsOn 'versionProperties' }
+
+jar {
+    // The bridge names this class on its own command line; the manifest is for running it by hand.
+    manifest {
+        attributes 'Main-Class': 'copper.wrapper.Main'
+    }
+}
