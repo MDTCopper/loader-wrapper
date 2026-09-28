@@ -31,7 +31,7 @@ java {
 // The jar carries what it is and what it was built against, so a bug report can name both without anyone
 // guessing from the file name. The loader ships the same kind of file in its own jar.
 def versionDir = layout.buildDirectory.dir('generated/version-info')
-def versionInfo = versionDir.map { it.file('version.properties') }
+def versionInfo = versionDir.map { it.file('wrapper-version.properties') }
 def wrapperVersion = version
 def targetLoader = loaderVersion
 
