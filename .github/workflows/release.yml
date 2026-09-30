@@ -1,0 +1,80 @@
+name: Release
+
+# 打 tag（版本号形态，如 0.1.0）时构建并把 jar 传到同名 release；
+# 手动触发只构建、把 jar 作为 artifact 传上来（验构建用，不发版）
+on:
+  push:
+    tags: ['*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      # build.gradle 里 compileOnly 的 loader 桌面 jar 在 JitPack 上取不到
+      # （实测 404 Tag or commit not found），所以直接从 loader 的 release 资产取，
+      # 配一个极简 POM 装进 mavenLocal —— build.gradle 的 repositories 里它排第一
+      - name: 把 loader 桌面 jar 装进 mavenLocal
+        run: |
+          loader_version=$(sed -n "s/.*loaderVersion = '\([^']*\)'.*/\1/p" build.gradle | head -n1)
+          echo "编译针对的 loader 版本：$loader_version"
+          dest="$HOME/.m2/repository/com/github/MDTCopper/loader/desktop/$loader_version"
+          mkdir -p "$dest"
+          curl -fsSL -o "$dest/desktop-$loader_version.jar" \
+            "https://github.com/MDTCopper/loader/releases/download/$loader_version/desktop-$loader_version.jar"
+          printf '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>com.github.MDTCopper.loader</groupId><artifactId>desktop</artifactId><version>%s</version><packaging>jar</packaging></project>\n' \
+            "$loader_version" > "$dest/desktop-$loader_version.pom"
+
+      - name: 构建
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon jar
+
+      - name: 打印产物与 jar 内的版本信息
+        run: |
+          jar=$(ls build/libs/loader-wrapper-*.jar)
+          echo "产物：$jar"
+          unzip -p "$jar" wrapper-version.properties
+
+      - name: 打 tag 时核对 tag 与 jar 版本一致
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          jar=$(ls build/libs/loader-wrapper-*.jar)
+          info=$(unzip -p "$jar" wrapper-version.properties)
+          jar_version=$(echo "$info" | sed -n 's/^version=//p')
+          jar_loader=$(echo "$info" | sed -n 's/^loaderVersion=//p')
+          if [ "${GITHUB_REF_NAME}" != "$jar_version" ]; then
+            echo "::error::tag（${GITHUB_REF_NAME}）与 jar 里的版本（$jar_version）不一致：宿主按 loader-wrapper-<tag>.jar 拼下载地址，两者必须相同"
+            exit 1
+          fi
+          echo "jar 编译针对的 loader 版本：$jar_loader"
+
+      - name: 传 release（打 tag 时，重跑会覆盖同名资产）
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" build/libs/loader-wrapper-*.jar --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" build/libs/loader-wrapper-*.jar \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+
+      - name: 传 artifact（手动触发时）
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: loader-wrapper
+          path: build/libs/loader-wrapper-*.jar
